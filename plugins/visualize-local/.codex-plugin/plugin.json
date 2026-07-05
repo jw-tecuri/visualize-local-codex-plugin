@@ -1,6 +1,6 @@
 {
   "name": "visualize-local",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260705064033",
   "description": "Create dark temporary HTML visualizations and open them locally in Codex.",
   "author": {
     "name": "jw-tecuri",

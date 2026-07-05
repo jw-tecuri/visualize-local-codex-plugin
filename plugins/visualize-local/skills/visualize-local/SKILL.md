@@ -53,7 +53,9 @@ Create dark-themed self-contained HTML/CSS/JS visualizations in private temp sto
 - Do not call canvas rendering APIs such as `getContext("2d")`, `getImageData(...)`, or WebGL pixel reads inside the browser read-only `evaluate` layer.
 - Prefer a screenshot plus DOM-visible controls for visual smoke checks of canvas/WebGL work.
 - If `domSnapshot()` fails in this browser build, fall back to a targeted `evaluate` check and `tab.screenshot(...)`.
-- In the final response, include the localhost URL and mention that the local server session must remain running while the user views the page, and that it auto-stops after the reported TTL.
+- In the final response, always include both:
+  - the localhost preview URL, with a note that the local server session must remain running while the user views the page and auto-stops after the reported TTL;
+  - a Markdown link to the created HTML file so the user can open or download it directly, using the writer's `html_path` output as the link target, for example `[Download the HTML](/private/tmp/codex-visualizations/.../index.html)`.
 
 ## Storage Contract
 
@@ -63,7 +65,7 @@ Create dark-themed self-contained HTML/CSS/JS visualizations in private temp sto
   - `index.html`
   - `manifest.json`
 - The writer may prune only old directories it created under that output root.
-- Report the resulting local file path or URL to the user, but emphasize that the repo/workspace was not modified.
+- Report the resulting local HTML file as a Markdown link every time, but emphasize that the repo/workspace was not modified.
 
 ## Writer Script
 

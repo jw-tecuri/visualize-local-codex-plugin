@@ -20,7 +20,7 @@ Start a new Codex thread after installing, then ask:
 Use $visualize-local to create an interactive calculator demo.
 ```
 
-The skill writes generated runs under `/private/tmp/codex-visualizations`, serves them from `127.0.0.1`, and auto-stops the local server after its TTL unless you explicitly ask otherwise.
+The skill writes generated runs under `/private/tmp/codex-visualizations`, serves them from `127.0.0.1`, and auto-stops the local server after its TTL unless you explicitly ask otherwise. Final responses include both the local preview URL and a direct link to the created `index.html` file so you can open or download it.
 
 ## Contents
 
