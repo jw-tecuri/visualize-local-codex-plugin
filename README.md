@@ -24,7 +24,7 @@ The skill writes generated runs under `/private/tmp/codex-visualizations`, serve
 
 ## Contents
 
-- `marketplace.json`: plugin marketplace catalog.
+- `.agents/plugins/marketplace.json`: plugin marketplace catalog.
 - `plugins/visualize-local`: Codex plugin package.
 - `plugins/visualize-local/skills/visualize-local`: bundled skill and helper scripts.
 
