@@ -1,0 +1,20 @@
+{
+  "name": "visualize-local-codex-plugin",
+  "interface": {
+    "displayName": "Visualize Local Codex Plugin"
+  },
+  "plugins": [
+    {
+      "name": "visualize-local",
+      "source": {
+        "source": "local",
+        "path": "./plugins/visualize-local"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

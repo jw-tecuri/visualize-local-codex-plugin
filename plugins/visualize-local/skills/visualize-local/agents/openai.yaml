@@ -1,0 +1,4 @@
+interface:
+  display_name: "Visualize Local"
+  short_description: "Dark HTML demos in private temp storage"
+  default_prompt: "Use $visualize-local to create an interactive calculator demo."

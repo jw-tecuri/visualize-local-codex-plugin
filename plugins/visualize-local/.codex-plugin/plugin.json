@@ -1,0 +1,36 @@
+{
+  "name": "visualize-local",
+  "version": "0.1.0",
+  "description": "Create dark temporary HTML visualizations and open them locally in Codex.",
+  "author": {
+    "name": "jw-tecuri",
+    "url": "https://github.com/jw-tecuri"
+  },
+  "repository": "https://github.com/jw-tecuri/visualize-local-codex-plugin",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "skills",
+    "visualization",
+    "html",
+    "browser"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Visualize Local",
+    "shortDescription": "Dark local HTML visualizations for Codex.",
+    "longDescription": "Visualize Local creates self-contained dark-themed HTML demos, explainers, calculators, dashboards, and slide-style interactions in private temp storage, then opens them through a local Codex browser preview server.",
+    "developerName": "jw-tecuri",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Local",
+      "Visualization"
+    ],
+    "defaultPrompt": [
+      "Use $visualize-local to create an interactive calculator demo.",
+      "Use $visualize-local to visualize Conway's Game of Life."
+    ],
+    "brandColor": "#38BDF8"
+  }
+}
