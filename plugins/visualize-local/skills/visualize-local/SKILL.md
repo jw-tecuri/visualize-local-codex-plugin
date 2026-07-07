@@ -1,11 +1,11 @@
 ---
 name: visualize-local
-description: Create temporary dark-themed interactive local HTML visualizations and automatically show them in the Codex in-app browser. Use when the user asks for interactive demos, calculators, dashboards, charts, slide-style presentations, mockups, HTML widgets, small games, step-through explainers, or says to visualize something locally without contaminating the workspace.
+description: Create temporary theme-aware interactive local HTML visualizations and return a named file link the user can open. Use when the user asks for interactive demos, calculators, dashboards, charts, slide-style presentations, mockups, HTML widgets, small games, step-through explainers, or says to visualize something locally without contaminating the workspace.
 ---
 
 # Visualize Local
 
-Create dark-themed self-contained HTML/CSS/JS visualizations in private temp storage and open them in the in-app browser. This skill is for throwaway interactive artifacts, not repo deliverables.
+Create theme-aware self-contained HTML/CSS/JS visualizations in private hidden temp storage and return a friendly Markdown link to the generated file. This skill is for throwaway interactive artifacts, not repo deliverables.
 
 ## Workflow
 
@@ -17,55 +17,35 @@ Create dark-themed self-contained HTML/CSS/JS visualizations in private temp sto
    python3 <skill_dir>/scripts/write_visualization.py --title "Calculator Demo" --slug calculator < generated.html
    ```
 
-4. Parse the JSON output and start the bundled localhost server helper for the generated directory:
-
-   ```bash
-   python3 <skill_dir>/scripts/serve_visualization.py /private/tmp/codex-visualizations/<run-dir>
-   ```
-
-   Keep the command session running while the user is viewing the visualization. By default, the helper exits after 3600 seconds. Use `--ttl-seconds 0` only when the user explicitly asks for an indefinite server.
-
-5. Open the printed `local_url` in the Codex in-app browser:
-   - load the Browser skill instructions first when available;
-   - initialize/select the in-app browser;
-   - call `await (await browser.capabilities.get("visibility")).set(true)`;
-   - reuse `await browser.tabs.selected()` when it exists, otherwise call `await browser.tabs.new()`;
-   - call `await tab.goto(localUrl)`;
-   - call `await tab.playwright.waitForLoadState({ state: "domcontentloaded" })`;
-   - verify the page title or one visible UI element.
-6. Do not try `file://` in the in-app browser by default. The writer still emits `file_url` as a useful artifact reference, but localhost is the default browser transport because this Codex app may block direct file navigation.
+4. Parse the JSON output. Do not open the file yourself and do not start a server.
+5. In the final response, include a named Markdown link to `html_path`, using the writer's `link_label` when possible, for example `[Open Calculator Demo](/private/tmp/.codex-visualize-local/20260707-180101-123456-calculator.html)`.
 
 ## HTML Rules
 
 - Produce a full document including `<!doctype html>`, `<html>`, `<head>`, and `<body>`.
 - Embed all CSS and JavaScript directly in the file.
-- Always create a dark-themed UI. Include `<meta name="color-scheme" content="dark">`, set `color-scheme: dark` in CSS, use a dark page background, light foreground text, and visible focus/hover states.
-- Do not create light, beige, paper-white, pastel, or default browser-styled pages unless the user explicitly overrides the theme.
+- Always create a theme-aware UI. Include `<meta name="color-scheme" content="light dark">`, set `color-scheme: light dark` in CSS, and define polished light and dark palettes with CSS variables plus `@media (prefers-color-scheme: dark)` or an equivalent explicit theme mechanism.
+- Respect the user's explicit theme request when provided. Otherwise, let the page follow the viewer's system light/dark preference.
+- Do not create a dark-only, light-only, beige, paper-white, pastel, or default browser-styled page unless the user explicitly asks for that theme.
 - Avoid external network dependencies, CDNs, package managers, generated repo files, or asset downloads.
 - Prefer plain HTML/CSS/JS unless the user specifically needs a framework-like artifact.
 - Make the experience immediately usable: visible controls, clear state, keyboard support where natural, and no setup instructions inside the UI.
-- Keep the page safe for local browser use. Use the bundled localhost server for in-app browser display.
+- Keep the page safe for direct local file use. Do not require a server, external assets, or browser automation to make the page work.
 
 ## Verification Rules
 
-- Verify ordinary HTML visualizations with a small `evaluate` check for title, heading, controls, counters, or status text.
-- For canvas/WebGL/SVG-heavy visualizations, expose verification-friendly DOM state such as a status element, counters, selected mode text, or `data-*` attributes.
-- Do not call canvas rendering APIs such as `getContext("2d")`, `getImageData(...)`, or WebGL pixel reads inside the browser read-only `evaluate` layer.
-- Prefer a screenshot plus DOM-visible controls for visual smoke checks of canvas/WebGL work.
-- If `domSnapshot()` fails in this browser build, fall back to a targeted `evaluate` check and `tab.screenshot(...)`.
-- In the final response, always include both:
-  - the localhost preview URL, with a note that the local server session must remain running while the user views the page and auto-stops after the reported TTL;
-  - a Markdown link to the created HTML file so the user can open or download it directly, using the writer's `html_path` output as the link target, for example `[Download the HTML](/private/tmp/codex-visualizations/.../index.html)`.
+- Do not use browser automation or try to open the generated visualization.
+- Before writing, make sure the generated HTML is complete and self-contained.
+- After writing, trust the writer's success output as the artifact check. If needed, use lightweight filesystem checks only, such as confirming the file exists.
+- In the final response, always include the named Markdown link to the created HTML file and mention that the repo/workspace was not modified.
 
 ## Storage Contract
 
-- The only default output root is `/private/tmp/codex-visualizations`.
-- The output root and run directories must be private: directories are `0700`, HTML and manifest files are `0600`. The writer and server share the same privacy checks, repair user-owned unsafe permissions, require both `index.html` and `manifest.json`, and refuse unsafe symlink/non-owned paths.
-- Each run goes into a unique timestamped directory containing:
-  - `index.html`
-  - `manifest.json`
-- The writer may prune only old directories it created under that output root.
-- Report the resulting local HTML file as a Markdown link every time, but emphasize that the repo/workspace was not modified.
+- The only default output root is `/private/tmp/.codex-visualize-local`.
+- The output root must be private: directory permissions are `0700` and HTML file permissions are `0600`. The writer repairs user-owned unsafe directory permissions and refuses unsafe symlink/non-owned paths.
+- Each run writes one timestamped HTML file directly under the output root, using a cleaned slug in the filename to avoid collisions.
+- Each writer invocation prunes old generated HTML files in that root so no more than 50 generated visualizations remain by default.
+- Report the resulting local HTML file as a named Markdown link every time, but emphasize that the repo/workspace was not modified.
 
 ## Writer Script
 
@@ -73,11 +53,13 @@ Use `<skill_dir>/scripts/write_visualization.py` for all writes. It reads HTML f
 
 ```json
 {
-  "directory": "/private/tmp/codex-visualizations/...",
-  "html_path": "/private/tmp/codex-visualizations/.../index.html",
-  "file_url": "file:///private/tmp/codex-visualizations/.../index.html",
+  "created_at": "2026-07-07T18:01:01.123456+00:00",
+  "directory": "/private/tmp/.codex-visualize-local",
+  "filename": "20260707-180101-123456-calculator.html",
+  "html_path": "/private/tmp/.codex-visualize-local/20260707-180101-123456-calculator.html",
+  "file_url": "file:///private/tmp/.codex-visualize-local/20260707-180101-123456-calculator.html",
+  "link_label": "Open Calculator Demo",
+  "max_files": 50,
   "title": "Calculator Demo"
 }
 ```
-
-Use `<skill_dir>/scripts/serve_visualization.py` to show an already-written visualization in the in-app browser. It verifies and repairs the storage privacy contract before serving, prints JSON with `local_url` and `ttl_seconds`, then serves the directory until the command session is stopped or the TTL expires. The helper uses a threaded local server so one slow or stale browser connection does not block later requests.

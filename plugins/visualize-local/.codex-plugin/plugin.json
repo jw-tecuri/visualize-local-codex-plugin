@@ -1,7 +1,7 @@
 {
   "name": "visualize-local",
-  "version": "0.1.0+codex.20260705064033",
-  "description": "Create dark temporary HTML visualizations and open them locally in Codex.",
+  "version": "0.1.0+codex.20260707181555",
+  "description": "Create theme-aware temporary HTML visualizations and return named local file links.",
   "author": {
     "name": "jw-tecuri",
     "url": "https://github.com/jw-tecuri"
@@ -18,8 +18,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Visualize Local",
-    "shortDescription": "Dark local HTML visualizations for Codex.",
-    "longDescription": "Visualize Local creates self-contained dark-themed HTML demos, explainers, calculators, dashboards, and slide-style interactions in private temp storage, then opens them through a local Codex browser preview server.",
+    "shortDescription": "Theme-aware HTML visualizations as local file links.",
+    "longDescription": "Visualize Local creates self-contained theme-aware HTML demos, explainers, calculators, dashboards, and slide-style interactions in a private hidden temp directory, then returns a named Markdown link to the generated file.",
     "developerName": "jw-tecuri",
     "category": "Productivity",
     "capabilities": [

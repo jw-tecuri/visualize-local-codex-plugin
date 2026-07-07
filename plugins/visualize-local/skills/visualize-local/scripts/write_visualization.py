@@ -7,22 +7,21 @@ import argparse
 import json
 import os
 import re
-import shutil
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
 from privacy import (
-    PRIVATE_DIR_MODE,
     PRIVATE_FILE_MODE,
     ensure_private_directory,
 )
 
 
-OUTPUT_ROOT = Path("/private/tmp/codex-visualizations")
-CREATED_BY = "visualize-local"
+OUTPUT_ROOT = Path("/private/tmp/.codex-visualize-local")
 MAX_SLUG_LENGTH = 64
+DEFAULT_MAX_FILES = 50
+OUTPUT_FILE_RE = re.compile(r"^\d{8}-\d{6}-\d{6}-[a-z0-9][a-z0-9._-]*\.html$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,12 +29,12 @@ def parse_args() -> argparse.Namespace:
         description="Write a temporary self-contained HTML visualization."
     )
     parser.add_argument("--title", required=True, help="Human-readable visualization title.")
-    parser.add_argument("--slug", required=True, help="Short name used in the output directory.")
+    parser.add_argument("--slug", required=True, help="Short name used in the output filename.")
     parser.add_argument(
-        "--prune-days",
+        "--max-files",
         type=int,
-        default=30,
-        help="Delete visualize-local outputs older than this many days. Use 0 to disable.",
+        default=DEFAULT_MAX_FILES,
+        help="Keep at most this many generated HTML files. Use 0 to disable pruning.",
     )
     return parser.parse_args()
 
@@ -67,42 +66,45 @@ def write_private_text(path: Path, content: str) -> None:
     path.chmod(PRIVATE_FILE_MODE)
 
 
-def prune_old_outputs(root: Path, prune_days: int) -> None:
-    if prune_days <= 0 or not root.exists():
+def generated_html_files(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for child in root.iterdir():
+        if child.is_symlink() or not child.is_file():
+            continue
+        if OUTPUT_FILE_RE.match(child.name):
+            files.append(child)
+    return files
+
+
+def sort_newest_first(paths: list[Path]) -> list[Path]:
+    return sorted(paths, key=lambda path: path.name, reverse=True)
+
+
+def prune_old_outputs(root: Path, max_files: int) -> None:
+    if max_files <= 0 or not root.exists():
         return
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=prune_days)
-    for child in root.iterdir():
-        if child.is_symlink():
-            continue
-        if not child.is_dir():
-            continue
-
-        manifest_path = child / "manifest.json"
+    for old_file in sort_newest_first(generated_html_files(root))[max_files:]:
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            created_at = datetime.fromisoformat(manifest["created_at"])
-        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            old_file.unlink()
+        except OSError:
             continue
 
-        if manifest.get("created_by") == CREATED_BY and created_at < cutoff:
-            shutil.rmtree(child)
 
-
-def unique_output_dir(root: Path, slug: str) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    candidate = root / f"{timestamp}-{slug}"
+def unique_output_file(root: Path, slug: str, now: datetime) -> Path:
+    timestamp = now.strftime("%Y%m%d-%H%M%S-%f")
+    candidate = root / f"{timestamp}-{slug}.html"
     suffix = 2
     while candidate.exists():
-        candidate = root / f"{timestamp}-{slug}-{suffix}"
+        candidate = root / f"{timestamp}-{slug}-{suffix}.html"
         suffix += 1
     return candidate
 
 
 def main() -> int:
     args = parse_args()
-    if args.prune_days < 0:
-        print("error: --prune-days must be greater than or equal to 0", file=sys.stderr)
+    if args.max_files < 0:
+        print("error: --max-files must be greater than or equal to 0", file=sys.stderr)
         return 2
 
     title = args.title.strip()
@@ -127,37 +129,20 @@ def main() -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    prune_old_outputs(OUTPUT_ROOT, args.prune_days)
-
-    output_dir = unique_output_dir(OUTPUT_ROOT, slug)
-    output_dir.mkdir(mode=PRIVATE_DIR_MODE, parents=False)
-    output_dir.chmod(PRIVATE_DIR_MODE)
-
-    html_path = output_dir / "index.html"
-    manifest_path = output_dir / "manifest.json"
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(timezone.utc)
+    html_path = unique_output_file(OUTPUT_ROOT, slug, created_at)
 
     write_private_text(html_path, html)
-    write_private_text(
-        manifest_path,
-        json.dumps(
-            {
-                "created_by": CREATED_BY,
-                "created_at": created_at,
-                "title": title,
-                "slug": slug,
-                "html_file": "index.html",
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-    )
+    prune_old_outputs(OUTPUT_ROOT, args.max_files)
 
     result = {
-        "directory": str(output_dir),
+        "created_at": created_at.isoformat(),
+        "directory": str(OUTPUT_ROOT),
+        "filename": html_path.name,
         "html_path": str(html_path),
         "file_url": file_url(html_path),
+        "link_label": f"Open {title}",
+        "max_files": args.max_files,
         "title": title,
     }
     print(json.dumps(result, sort_keys=True))
