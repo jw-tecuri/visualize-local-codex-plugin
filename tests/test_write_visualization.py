@@ -142,6 +142,59 @@ class WriteVisualizationTests(unittest.TestCase):
             self.assertIn("external script src", result.stderr)
             self.assertFalse(root.exists())
 
+    def test_rejects_protocol_relative_urls(self) -> None:
+        html = VALID_HTML.replace("</body>", '<img src="//example.com/a.png"></body>')
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+
+            result = self.run_writer(root, html)
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("remote URL attribute", result.stderr)
+            self.assertFalse(root.exists())
+
+    def test_rejects_remote_srcset(self) -> None:
+        html = VALID_HTML.replace(
+            "</body>",
+            '<img srcset="local.png 1x, https://example.com/a.png 2x"></body>',
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+
+            result = self.run_writer(root, html)
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("remote URL attribute", result.stderr)
+            self.assertFalse(root.exists())
+
+    def test_rejects_unquoted_remote_srcset_candidate(self) -> None:
+        html = VALID_HTML.replace(
+            "</body>",
+            '<img srcset=local.png,https://example.com/a.png></body>',
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+
+            result = self.run_writer(root, html)
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("remote URL attribute", result.stderr)
+            self.assertFalse(root.exists())
+
+    def test_rejects_css_import(self) -> None:
+        html = VALID_HTML.replace(
+            "</head>",
+            '<style>@import "https://example.com/a.css";</style></head>',
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+
+            result = self.run_writer(root, html)
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("remote CSS import", result.stderr)
+            self.assertFalse(root.exists())
+
     def test_prune_keeps_newest_generated_files_and_unrelated_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -24,6 +24,12 @@ OUTPUT_ROOT_ENV = "CODEX_VISUALIZE_LOCAL_ROOT"
 MAX_SLUG_LENGTH = 64
 DEFAULT_MAX_FILES = 50
 OUTPUT_FILE_RE = re.compile(r"^\d{8}-\d{6}-\d{6}-[a-z0-9][a-z0-9._-]*\.html$")
+REMOTE_URL_RE = re.compile(r"(?:https?:)?//", re.IGNORECASE)
+URL_ATTRIBUTE_RE = re.compile(
+    r"\b(?:src|href|srcset|poster|data|action|formaction)\s*=\s*"
+    r"(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))",
+    re.IGNORECASE,
+)
 REQUIRED_HTML_PATTERNS = {
     "doctype": re.compile(r"<!doctype\s+html\b", re.IGNORECASE),
     "html element": re.compile(r"<html\b", re.IGNORECASE),
@@ -34,8 +40,11 @@ REQUIRED_HTML_PATTERNS = {
 DISALLOWED_HTML_PATTERNS = {
     "external script src": re.compile(r"<script\b[^>]*\bsrc\s*=", re.IGNORECASE),
     "external stylesheet link": re.compile(r"<link\b[^>]*\bhref\s*=", re.IGNORECASE),
-    "remote src or href": re.compile(r"\b(?:src|href)\s*=\s*['\"]\s*https?://", re.IGNORECASE),
-    "remote CSS url": re.compile(r"url\(\s*['\"]?\s*https?://", re.IGNORECASE),
+    "remote CSS import": re.compile(
+        r"@import\s+(?:url\(\s*)?['\"]?\s*(?:https?:)?//",
+        re.IGNORECASE,
+    ),
+    "remote CSS url": re.compile(r"url\(\s*['\"]?\s*(?:https?:)?//", re.IGNORECASE),
 }
 
 
@@ -88,6 +97,11 @@ def validate_html(html: str) -> list[str]:
         for name, pattern in DISALLOWED_HTML_PATTERNS.items()
         if pattern.search(html) is not None
     )
+    if any(
+        REMOTE_URL_RE.search(next(value for value in match.groups() if value is not None))
+        for match in URL_ATTRIBUTE_RE.finditer(html)
+    ):
+        errors.append("contains remote URL attribute")
     return errors
 
 
