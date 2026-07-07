@@ -18,7 +18,7 @@ Create theme-aware self-contained HTML/CSS/JS visualizations in private hidden t
    ```
 
 4. Parse the JSON output. Do not open the file yourself and do not start a server.
-5. In the final response, include a named Markdown link to `html_path`, using the writer's `link_label` when possible, for example `[Open Calculator Demo](/private/tmp/.codex-visualize-local/20260707-180101-123456-calculator.html)`.
+5. In the final response, include a named Markdown link to the absolute `html_path`, using the writer's `link_label` when possible.
 
 ## HTML Rules
 
@@ -35,13 +35,14 @@ Create theme-aware self-contained HTML/CSS/JS visualizations in private hidden t
 ## Verification Rules
 
 - Do not use browser automation or try to open the generated visualization.
-- Before writing, make sure the generated HTML is complete and self-contained.
+- Before writing, make sure the generated HTML is complete and self-contained. The writer also rejects missing document structure, missing `color-scheme`, and external dependency references.
 - After writing, trust the writer's success output as the artifact check. If needed, use lightweight filesystem checks only, such as confirming the file exists.
 - In the final response, always include the named Markdown link to the created HTML file and mention that the repo/workspace was not modified.
 
 ## Storage Contract
 
-- The only default output root is `/private/tmp/.codex-visualize-local`.
+- The default output root is `.codex-visualize-local` under Python's system temp directory, as reported by `tempfile.gettempdir()`.
+- Set `CODEX_VISUALIZE_LOCAL_ROOT` only when an explicit override is needed, such as isolated local tests.
 - The output root must be private: directory permissions are `0700` and HTML file permissions are `0600`. The writer repairs user-owned unsafe directory permissions and refuses unsafe symlink/non-owned paths.
 - Each run writes one timestamped HTML file directly under the output root, using a cleaned slug in the filename to avoid collisions.
 - Each writer invocation prunes old generated HTML files in that root so no more than 50 generated visualizations remain by default.
@@ -54,10 +55,10 @@ Use `<skill_dir>/scripts/write_visualization.py` for all writes. It reads HTML f
 ```json
 {
   "created_at": "2026-07-07T18:01:01.123456+00:00",
-  "directory": "/private/tmp/.codex-visualize-local",
+  "directory": "<system-temp>/.codex-visualize-local",
   "filename": "20260707-180101-123456-calculator.html",
-  "html_path": "/private/tmp/.codex-visualize-local/20260707-180101-123456-calculator.html",
-  "file_url": "file:///private/tmp/.codex-visualize-local/20260707-180101-123456-calculator.html",
+  "html_path": "<system-temp>/.codex-visualize-local/20260707-180101-123456-calculator.html",
+  "file_url": "file:///<system-temp>/.codex-visualize-local/20260707-180101-123456-calculator.html",
   "link_label": "Open Calculator Demo",
   "max_files": 50,
   "title": "Calculator Demo"

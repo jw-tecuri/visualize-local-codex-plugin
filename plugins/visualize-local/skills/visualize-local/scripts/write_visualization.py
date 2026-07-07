@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -18,10 +19,24 @@ from privacy import (
 )
 
 
-OUTPUT_ROOT = Path("/private/tmp/.codex-visualize-local")
+OUTPUT_DIR_NAME = ".codex-visualize-local"
+OUTPUT_ROOT_ENV = "CODEX_VISUALIZE_LOCAL_ROOT"
 MAX_SLUG_LENGTH = 64
 DEFAULT_MAX_FILES = 50
 OUTPUT_FILE_RE = re.compile(r"^\d{8}-\d{6}-\d{6}-[a-z0-9][a-z0-9._-]*\.html$")
+REQUIRED_HTML_PATTERNS = {
+    "doctype": re.compile(r"<!doctype\s+html\b", re.IGNORECASE),
+    "html element": re.compile(r"<html\b", re.IGNORECASE),
+    "head element": re.compile(r"<head\b", re.IGNORECASE),
+    "body element": re.compile(r"<body\b", re.IGNORECASE),
+    "color-scheme": re.compile(r"color-scheme", re.IGNORECASE),
+}
+DISALLOWED_HTML_PATTERNS = {
+    "external script src": re.compile(r"<script\b[^>]*\bsrc\s*=", re.IGNORECASE),
+    "external stylesheet link": re.compile(r"<link\b[^>]*\bhref\s*=", re.IGNORECASE),
+    "remote src or href": re.compile(r"\b(?:src|href)\s*=\s*['\"]\s*https?://", re.IGNORECASE),
+    "remote CSS url": re.compile(r"url\(\s*['\"]?\s*https?://", re.IGNORECASE),
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,8 +62,33 @@ def clean_slug(raw_slug: str) -> str:
     return slug[:MAX_SLUG_LENGTH].strip("-._") or "visualization"
 
 
+def absolute_path(path: Path) -> Path:
+    return Path(os.path.abspath(path.expanduser()))
+
+
+def output_root() -> Path:
+    override = os.environ.get(OUTPUT_ROOT_ENV, "").strip()
+    if override:
+        return absolute_path(Path(override))
+    return absolute_path(Path(tempfile.gettempdir()) / OUTPUT_DIR_NAME)
+
+
 def file_url(path: Path) -> str:
     return "file://" + quote(str(path.resolve()))
+
+
+def validate_html(html: str) -> list[str]:
+    errors = [
+        f"missing {name}"
+        for name, pattern in REQUIRED_HTML_PATTERNS.items()
+        if pattern.search(html) is None
+    ]
+    errors.extend(
+        f"contains {name}"
+        for name, pattern in DISALLOWED_HTML_PATTERNS.items()
+        if pattern.search(html) is not None
+    )
+    return errors
 
 
 def write_private_text(path: Path, content: str) -> None:
@@ -123,21 +163,30 @@ def main() -> int:
         print("error: HTML stdin must not be empty", file=sys.stderr)
         return 2
 
+    validation_errors = validate_html(html)
+    if validation_errors:
+        print(
+            "error: invalid HTML: " + "; ".join(validation_errors),
+            file=sys.stderr,
+        )
+        return 2
+
+    root = output_root()
     try:
-        ensure_private_directory(OUTPUT_ROOT, create=True)
+        ensure_private_directory(root, create=True)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
     created_at = datetime.now(timezone.utc)
-    html_path = unique_output_file(OUTPUT_ROOT, slug, created_at)
+    html_path = unique_output_file(root, slug, created_at)
 
     write_private_text(html_path, html)
-    prune_old_outputs(OUTPUT_ROOT, args.max_files)
+    prune_old_outputs(root, args.max_files)
 
     result = {
         "created_at": created_at.isoformat(),
-        "directory": str(OUTPUT_ROOT),
+        "directory": str(root),
         "filename": html_path.name,
         "html_path": str(html_path),
         "file_url": file_url(html_path),

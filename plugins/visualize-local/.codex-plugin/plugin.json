@@ -1,6 +1,6 @@
 {
   "name": "visualize-local",
-  "version": "0.1.0+codex.20260707181555",
+  "version": "0.1.0+codex.20260707185241",
   "description": "Create theme-aware temporary HTML visualizations and return named local file links.",
   "author": {
     "name": "jw-tecuri",
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Visualize Local",
     "shortDescription": "Theme-aware HTML visualizations as local file links.",
-    "longDescription": "Visualize Local creates self-contained theme-aware HTML demos, explainers, calculators, dashboards, and slide-style interactions in a private hidden temp directory, then returns a named Markdown link to the generated file.",
+    "longDescription": "Visualize Local creates self-contained theme-aware HTML demos, explainers, calculators, dashboards, and slide-style interactions in a private hidden directory under the system temp folder, then returns a named Markdown link to the generated file.",
     "developerName": "jw-tecuri",
     "category": "Productivity",
     "capabilities": [

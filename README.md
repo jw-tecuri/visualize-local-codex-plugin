@@ -1,6 +1,6 @@
 # Visualize Local Codex Plugin
 
-Visualize Local packages the `$visualize-local` skill for Codex. It creates theme-aware, self-contained HTML visualizations in a private hidden temp directory and returns a friendly file link, without writing generated demos into the active project workspace.
+Visualize Local packages the `$visualize-local` skill for Codex. It creates theme-aware, self-contained HTML visualizations in a private hidden directory under the system temp folder and returns a friendly file link, without writing generated demos into the active project workspace.
 
 ## Install
 
@@ -20,7 +20,7 @@ Start a new Codex thread after installing, then ask:
 Use $visualize-local to create an interactive calculator demo.
 ```
 
-The skill writes generated files under `/private/tmp/.codex-visualize-local`, using timestamped filenames to avoid collisions. Each invocation prunes that hidden directory so no more than 50 generated HTML visualizations remain. Final responses include a named Markdown link to the generated file so you can open it yourself in the in-app browser.
+The skill writes generated files under `.codex-visualize-local` in the system temp folder, using timestamped filenames to avoid collisions. Set `CODEX_VISUALIZE_LOCAL_ROOT` to override that directory. Each invocation prunes the hidden directory so no more than 50 generated HTML visualizations remain. Final responses include a named Markdown link to the generated file so you can open it yourself in the in-app browser.
 
 ## Contents
 
