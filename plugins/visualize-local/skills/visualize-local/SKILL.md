@@ -17,7 +17,7 @@ Create theme-aware self-contained HTML/CSS/JS visualizations in private hidden t
    python3 <skill_dir>/scripts/write_visualization.py --title "Calculator Demo" --slug calculator < generated.html
    ```
 
-4. Parse the JSON output. Do not open the file yourself and do not start a server.
+4. Parse the JSON output. The writer adds the required restrictive Content Security Policy before saving. Do not open the file yourself and do not start a server.
 5. In the final response, include a named Markdown link to the absolute `html_path`, using the writer's `link_label` when possible.
 
 ## HTML Rules
@@ -28,6 +28,7 @@ Create theme-aware self-contained HTML/CSS/JS visualizations in private hidden t
 - Respect the user's explicit theme request when provided. Otherwise, let the page follow the viewer's system light/dark preference.
 - Do not create a dark-only, light-only, beige, paper-white, pastel, or default browser-styled page unless the user explicitly asks for that theme.
 - Avoid external network dependencies, CDNs, package managers, generated repo files, or asset downloads.
+- Do not depend on frames, workers, objects, forms, WebRTC, or network connections; the writer's injected policy blocks them.
 - Prefer plain HTML/CSS/JS unless the user specifically needs a framework-like artifact.
 - Make the experience immediately usable: visible controls, clear state, keyboard support where natural, and no setup instructions inside the UI.
 - Keep the page safe for direct local file use. Do not require a server, external assets, or browser automation to make the page work.
@@ -35,7 +36,7 @@ Create theme-aware self-contained HTML/CSS/JS visualizations in private hidden t
 ## Verification Rules
 
 - Do not use browser automation or try to open the generated visualization.
-- Before writing, make sure the generated HTML is complete and self-contained. The writer also rejects missing document structure, missing `color-scheme`, and external dependency references.
+- Before writing, make sure the generated HTML is complete and self-contained. The writer rejects missing document structure, missing `color-scheme`, and external dependency references, then injects a restrictive Content Security Policy as the first element in `<head>`.
 - After writing, trust the writer's success output as the artifact check. If needed, use lightweight filesystem checks only, such as confirming the file exists.
 - In the final response, always include the named Markdown link to the created HTML file and mention that the repo/workspace was not modified.
 
@@ -44,6 +45,7 @@ Create theme-aware self-contained HTML/CSS/JS visualizations in private hidden t
 - The default output root is `.codex-visualize-local` under Python's system temp directory, as reported by `tempfile.gettempdir()`.
 - Set `CODEX_VISUALIZE_LOCAL_ROOT` only when an explicit override is needed, such as isolated local tests.
 - The output root must be private: directory permissions are `0700` and HTML file permissions are `0600`. The writer repairs user-owned unsafe directory permissions and refuses unsafe symlink/non-owned paths.
+- A persistent `.writer.lock` file with `0600` permissions serializes filename allocation, writing, pruning, and success output across concurrent invocations.
 - Each run writes one timestamped HTML file directly under the output root, using a cleaned slug in the filename to avoid collisions.
 - Each writer invocation prunes old generated HTML files in that root so no more than 50 generated visualizations remain by default.
 - Report the resulting local HTML file as a named Markdown link every time, but emphasize that the repo/workspace was not modified.

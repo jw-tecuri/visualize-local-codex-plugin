@@ -1,6 +1,6 @@
 {
   "name": "visualize-local",
-  "version": "0.1.0+codex.20260710200732",
+  "version": "0.1.0+codex.20260710202508",
   "description": "Create theme-aware temporary HTML visualizations and return named local file links.",
   "author": {
     "name": "jw-tecuri",
