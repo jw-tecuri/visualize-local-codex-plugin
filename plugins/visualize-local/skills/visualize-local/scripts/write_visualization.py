@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import html as html_module
 import json
 import os
 import re
@@ -24,10 +25,13 @@ OUTPUT_ROOT_ENV = "CODEX_VISUALIZE_LOCAL_ROOT"
 MAX_SLUG_LENGTH = 64
 DEFAULT_MAX_FILES = 50
 OUTPUT_FILE_RE = re.compile(r"^\d{8}-\d{6}-\d{6}-[a-z0-9][a-z0-9._-]*\.html$")
-REMOTE_URL_RE = re.compile(r"(?:https?:)?//", re.IGNORECASE)
 URL_ATTRIBUTE_RE = re.compile(
-    r"\b(?:src|href|srcset|poster|data|action|formaction)\s*=\s*"
+    r"\b(src|href|srcset|poster|data|action|formaction)\s*=\s*"
     r"(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))",
+    re.IGNORECASE,
+)
+CSS_URL_RE = re.compile(
+    r"url\(\s*(?:\"([^\"]*)\"|'([^']*)'|([^)]*))\s*\)",
     re.IGNORECASE,
 )
 REQUIRED_HTML_PATTERNS = {
@@ -40,10 +44,7 @@ REQUIRED_HTML_PATTERNS = {
 DISALLOWED_HTML_PATTERNS = {
     "external script src": re.compile(r"<script\b[^>]*\bsrc\s*=", re.IGNORECASE),
     "external stylesheet link": re.compile(r"<link\b[^>]*\bhref\s*=", re.IGNORECASE),
-    "remote CSS import": re.compile(
-        r"@import\s+(?:url\(\s*)?['\"]?\s*(?:https?:)?//",
-        re.IGNORECASE,
-    ),
+    "external CSS import": re.compile(r"@import\b", re.IGNORECASE),
     "remote CSS url": re.compile(r"url\(\s*['\"]?\s*(?:https?:)?//", re.IGNORECASE),
 }
 
@@ -86,6 +87,31 @@ def file_url(path: Path) -> str:
     return "file://" + quote(str(path.resolve()))
 
 
+def matched_url_value(match: re.Match[str], *, value_group_start: int) -> str:
+    return next(
+        value for value in match.groups()[value_group_start:] if value is not None
+    )
+
+
+def is_remote_url_reference(value: str) -> bool:
+    value = html_module.unescape(value).strip().lower()
+    if value.startswith("data:"):
+        return False
+    return value.startswith(("http://", "https://", "//")) or bool(
+        re.search(r"(?:^|[\s,])(?:https?:)?//", value)
+    )
+
+
+def is_embedded_url_reference(value: str) -> bool:
+    value = html_module.unescape(value).strip()
+    return (
+        not value
+        or value.startswith("#")
+        or value.lower().startswith("data:")
+        or value.lower() == "about:blank"
+    )
+
+
 def validate_html(html: str) -> list[str]:
     errors = [
         f"missing {name}"
@@ -97,11 +123,21 @@ def validate_html(html: str) -> list[str]:
         for name, pattern in DISALLOWED_HTML_PATTERNS.items()
         if pattern.search(html) is not None
     )
-    if any(
-        REMOTE_URL_RE.search(next(value for value in match.groups() if value is not None))
+    url_attributes = [
+        (match.group(1).lower(), matched_url_value(match, value_group_start=1))
         for match in URL_ATTRIBUTE_RE.finditer(html)
-    ):
+    ]
+    if any(is_remote_url_reference(value) for _, value in url_attributes):
         errors.append("contains remote URL attribute")
+    if any(
+        (attribute == "srcset" and bool(value.strip()))
+        or not is_embedded_url_reference(value)
+        for attribute, value in url_attributes
+    ) or any(
+        not is_embedded_url_reference(matched_url_value(match, value_group_start=0))
+        for match in CSS_URL_RE.finditer(html)
+    ):
+        errors.append("contains non-embedded URL reference")
     return errors
 
 
@@ -134,11 +170,21 @@ def sort_newest_first(paths: list[Path]) -> list[Path]:
     return sorted(paths, key=lambda path: path.name, reverse=True)
 
 
-def prune_old_outputs(root: Path, max_files: int) -> None:
+def prune_old_outputs(
+    root: Path,
+    max_files: int,
+    *,
+    protected_path: Path | None = None,
+) -> None:
     if max_files <= 0 or not root.exists():
         return
 
-    for old_file in sort_newest_first(generated_html_files(root))[max_files:]:
+    generated_files = generated_html_files(root)
+    protected_file_count = int(protected_path in generated_files)
+    other_files = [path for path in generated_files if path != protected_path]
+    keep_other_files = max(0, max_files - protected_file_count)
+
+    for old_file in sort_newest_first(other_files)[keep_other_files:]:
         try:
             old_file.unlink()
         except OSError:
@@ -196,7 +242,7 @@ def main() -> int:
     html_path = unique_output_file(root, slug, created_at)
 
     write_private_text(html_path, html)
-    prune_old_outputs(root, args.max_files)
+    prune_old_outputs(root, args.max_files, protected_path=html_path)
 
     result = {
         "created_at": created_at.isoformat(),

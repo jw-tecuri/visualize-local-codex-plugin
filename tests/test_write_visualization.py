@@ -192,8 +192,60 @@ class WriteVisualizationTests(unittest.TestCase):
             result = self.run_writer(root, html)
 
             self.assertEqual(result.returncode, 2)
-            self.assertIn("remote CSS import", result.stderr)
+            self.assertIn("external CSS import", result.stderr)
             self.assertFalse(root.exists())
+
+    def test_rejects_local_asset_references(self) -> None:
+        local_references = {
+            "image source": '<img src="missing.png">',
+            "video poster": '<video poster="missing.jpg"></video>',
+            "CSS URL": '<div style="background-image: url(missing.png)"></div>',
+        }
+
+        for label, markup in local_references.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / ".codex-visualize-local"
+                html = VALID_HTML.replace("</body>", f"{markup}</body>")
+
+                result = self.run_writer(root, html)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("non-embedded URL reference", result.stderr)
+                self.assertFalse(root.exists())
+
+    def test_allows_embedded_asset_references(self) -> None:
+        html = VALID_HTML.replace(
+            "</body>",
+            '<a href="#details">Details</a>'
+            '<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==">'
+            '<svg><use href="#icon"></use></svg>'
+            '<div style="mask-image: url(#icon)"></div>'
+            "</body>",
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+
+            result = self.run_writer(root, html)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(Path(payload["html_path"]).exists())
+
+    def test_pruning_never_deletes_the_current_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+            root.mkdir()
+            future_file = root / "99991231-235959-999999-future.html"
+            future_file.write_text("future", encoding="utf-8")
+
+            result = self.run_writer(root, max_files=1)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            html_path = Path(payload["html_path"])
+            self.assertTrue(html_path.exists())
+            self.assertFalse(future_file.exists())
+            self.assertEqual(len(list(root.glob("*.html"))), 1)
 
     def test_prune_keeps_newest_generated_files_and_unrelated_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
