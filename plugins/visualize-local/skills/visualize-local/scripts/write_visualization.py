@@ -29,13 +29,57 @@ LOCK_FILE_NAME = ".writer.lock"
 MAX_SLUG_LENGTH = 64
 DEFAULT_MAX_FILES = 50
 OUTPUT_FILE_RE = re.compile(r"^\d{8}-\d{6}-\d{6}-[a-z0-9][a-z0-9._-]*\.html$")
-URL_ATTRIBUTES = {"src", "href", "srcset", "poster", "data", "action", "formaction"}
-CSS_URL_RE = re.compile(
-    r"url\(\s*(?:\"([^\"]*)\"|'([^']*)'|([^)]*))\s*\)",
-    re.IGNORECASE,
-)
+URL_ATTRIBUTES = {
+    "action",
+    "archive",
+    "attributionsrc",
+    "background",
+    "classid",
+    "codebase",
+    "data",
+    "formaction",
+    "href",
+    "imagesrcset",
+    "longdesc",
+    "manifest",
+    "ping",
+    "poster",
+    "src",
+    "srcset",
+    "usemap",
+    "xlink:href",
+}
+SRCSET_ATTRIBUTES = {"imagesrcset", "srcset"}
+ACTIVE_TRACKING_URL_ATTRIBUTES = {"attributionsrc", "ping"}
+BLOCKED_EMBEDDED_ELEMENTS = {
+    "applet",
+    "embed",
+    "fencedframe",
+    "frame",
+    "iframe",
+    "object",
+    "portal",
+}
+CSS_VALUE_ATTRIBUTES = {
+    "clip-path",
+    "cursor",
+    "fill",
+    "filter",
+    "marker-end",
+    "marker-mid",
+    "marker-start",
+    "marker",
+    "mask",
+    "shape-inside",
+    "shape-outside",
+    "shape-subtract",
+    "stroke",
+    "style",
+}
+CSS_STRING_URL_FUNCTIONS = ("-webkit-image-set", "image-set", "image", "src")
 CSS_IMPORT_RE = re.compile(r"@import\b", re.IGNORECASE)
-COLOR_SCHEME_RE = re.compile(r"\bcolor-scheme\s*:", re.IGNORECASE)
+COLOR_SCHEME_RE = re.compile(r"(?:^|[;{])\s*color-scheme\s*:", re.IGNORECASE)
+CSS_WHITESPACE = " \t\n\f\r"
 CSP_POLICY = "; ".join(
     (
         "default-src 'none'",
@@ -68,7 +112,9 @@ class HTMLDocumentInspector(HTMLParser):
         self.line_offsets.extend(match.end() for match in re.finditer(r"\n", source))
         self.has_doctype = False
         self.elements: set[str] = set()
-        self.has_color_scheme = False
+        self.has_color_scheme_meta = False
+        self.has_color_scheme_css = False
+        self.has_meta_refresh = False
         self.head_end_offset: int | None = None
         self.elements_before_head: list[str] = []
         self.url_attributes: list[tuple[str, str, str]] = []
@@ -91,7 +137,9 @@ class HTMLDocumentInspector(HTMLParser):
         tag = tag.lower()
         self.elements.add(tag)
         attribute_items = [(name.lower(), value or "") for name, value in attrs]
-        attributes = dict(attribute_items)
+        attributes: dict[str, str] = {}
+        for name, value in attribute_items:
+            attributes.setdefault(name, value)
 
         if self.head_end_offset is None and tag not in {"html", "head"}:
             self.elements_before_head.append(tag)
@@ -102,11 +150,21 @@ class HTMLDocumentInspector(HTMLParser):
 
         if tag == "style":
             self._style_depth += 1
-        if tag == "meta" and attributes.get("name", "").lower() == "color-scheme":
-            self.has_color_scheme = True
+        if tag == "meta":
+            meta_name = attributes.get("name", "").strip().lower()
+            content_tokens = attributes.get("content", "").lower().split()
+            if meta_name == "color-scheme" and {"light", "dark"}.issubset(
+                content_tokens
+            ):
+                self.has_color_scheme_meta = True
+            if any(
+                name == "http-equiv" and value.strip().lower() == "refresh"
+                for name, value in attribute_items
+            ):
+                self.has_meta_refresh = True
 
         for attribute, value in attribute_items:
-            if attribute == "style":
+            if attribute in CSS_VALUE_ATTRIBUTES:
                 self.style_sources.append(value)
             if attribute in URL_ATTRIBUTES:
                 self.url_attributes.append((tag, attribute, value))
@@ -120,12 +178,163 @@ class HTMLDocumentInspector(HTMLParser):
             self.style_sources.append(data)
 
 
+def skip_css_comment(source: str, position: int) -> int:
+    comment_end = source.find("*/", position + 2)
+    return len(source) if comment_end < 0 else comment_end + 2
+
+
+def skip_css_string(source: str, position: int) -> int:
+    quote_character = source[position]
+    position += 1
+    while position < len(source):
+        if source[position] == "\\":
+            position += 2
+        elif source[position] == quote_character:
+            return position + 1
+        else:
+            position += 1
+    return len(source)
+
+
+def css_code_without_strings_and_comments(source: str) -> str:
+    code = list(source)
+    position = 0
+    while position < len(source):
+        if source.startswith("/*", position):
+            end = skip_css_comment(source, position)
+            code[position:end] = " " * (end - position)
+            position = end
+        elif source[position] in {'"', "'"}:
+            end = skip_css_string(source, position)
+            code[position:end] = " " * (end - position)
+            position = end
+        else:
+            position += 1
+    return "".join(code)
+
+
+def skip_css_whitespace_and_comments(source: str, position: int) -> int:
+    while position < len(source):
+        if source[position] in CSS_WHITESPACE:
+            position += 1
+        elif source.startswith("/*", position):
+            position = skip_css_comment(source, position)
+        else:
+            break
+    return position
+
+
+def is_css_name_character(character: str) -> bool:
+    return (
+        character.isalnum()
+        or character in {"-", "_", "\\"}
+        or ord(character) >= 0x80
+    )
+
+
+def css_url_values(source: str) -> list[str]:
+    values: list[str] = []
+    position = 0
+    while position < len(source):
+        if source.startswith("/*", position):
+            position = skip_css_comment(source, position)
+            continue
+        if source[position] in {'"', "'"}:
+            position = skip_css_string(source, position)
+            continue
+
+        previous_is_name = position > 0 and is_css_name_character(source[position - 1])
+        if not previous_is_name and source[position : position + 3].lower() == "url":
+            function_start = skip_css_whitespace_and_comments(source, position + 3)
+            if function_start < len(source) and source[function_start] == "(":
+                value_start = skip_css_whitespace_and_comments(source, function_start + 1)
+                if value_start < len(source) and source[value_start] in {'"', "'"}:
+                    value_end = skip_css_string(source, value_start)
+                    values.append(
+                        source[value_start + 1 : max(value_start + 1, value_end - 1)]
+                    )
+                    position = value_end
+                else:
+                    value_end = value_start
+                    while value_end < len(source) and source[value_end] != ")":
+                        if source[value_end] == "\\" and value_end + 1 < len(source):
+                            value_end += 2
+                        else:
+                            value_end += 1
+                    values.append(source[value_start:value_end].strip())
+                    position = value_end + int(value_end < len(source))
+                continue
+        position += 1
+    return values
+
+
+def css_string_url_function_values(source: str) -> list[str]:
+    values: list[str] = []
+    position = 0
+    while position < len(source):
+        if source.startswith("/*", position):
+            position = skip_css_comment(source, position)
+            continue
+        if source[position] in {'"', "'"}:
+            position = skip_css_string(source, position)
+            continue
+
+        previous_is_name = position > 0 and is_css_name_character(source[position - 1])
+        function_name = next(
+            (
+                name
+                for name in CSS_STRING_URL_FUNCTIONS
+                if source[position : position + len(name)].lower() == name
+            ),
+            None,
+        )
+        if previous_is_name or function_name is None:
+            position += 1
+            continue
+
+        function_start = skip_css_whitespace_and_comments(
+            source,
+            position + len(function_name),
+        )
+        if function_start >= len(source) or source[function_start] != "(":
+            position += 1
+            continue
+
+        position = function_start + 1
+        nested_parentheses = 0
+        while position < len(source):
+            if source.startswith("/*", position):
+                position = skip_css_comment(source, position)
+            elif source[position] in {'"', "'"}:
+                value_end = skip_css_string(source, position)
+                if not nested_parentheses:
+                    values.append(
+                        source[position + 1 : max(position + 1, value_end - 1)]
+                    )
+                position = value_end
+            elif source[position] == "(":
+                nested_parentheses += 1
+                position += 1
+            elif source[position] == ")":
+                if not nested_parentheses:
+                    position += 1
+                    break
+                nested_parentheses -= 1
+                position += 1
+            else:
+                position += 1
+    return values
+
+
 def inspect_html(html: str) -> HTMLDocumentInspector:
     inspector = HTMLDocumentInspector(html)
     inspector.feed(html)
     inspector.close()
-    if any(COLOR_SCHEME_RE.search(source) for source in inspector.style_sources):
-        inspector.has_color_scheme = True
+    if any(
+        COLOR_SCHEME_RE.search(css_code_without_strings_and_comments(source))
+        for source in inspector.style_sources
+    ):
+        inspector.has_color_scheme_css = True
     return inspector
 
 
@@ -186,6 +395,14 @@ def is_embedded_url_reference(value: str) -> bool:
     )
 
 
+def markdown_link_label(title: str) -> str:
+    printable_title = "".join(
+        character if character.isprintable() else " " for character in title
+    )
+    label = re.sub(r"\s+", " ", f"Open {printable_title}").strip()
+    return label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
 def srcset_urls(value: str) -> list[str]:
     """Extract URL tokens while preserving commas inside data URLs."""
     urls: list[str] = []
@@ -222,10 +439,6 @@ def srcset_urls(value: str) -> list[str]:
     return urls
 
 
-def matched_css_url(match: re.Match[str]) -> str:
-    return next(value for value in match.groups() if value is not None).strip()
-
-
 def validate_inspector(inspector: HTMLDocumentInspector) -> list[str]:
     errors: list[str] = []
     if not inspector.has_doctype:
@@ -233,10 +446,17 @@ def validate_inspector(inspector: HTMLDocumentInspector) -> list[str]:
     for element in ("html", "head", "body"):
         if element not in inspector.elements:
             errors.append(f"missing {element} element")
-    if not inspector.has_color_scheme:
-        errors.append("missing color-scheme")
+    if not inspector.has_color_scheme_meta:
+        errors.append("missing color-scheme meta")
+    if not inspector.has_color_scheme_css:
+        errors.append("missing color-scheme CSS property")
     if inspector.elements_before_head:
         errors.append("contains element before head")
+    if inspector.has_meta_refresh:
+        errors.append("contains meta refresh")
+    blocked_elements = sorted(inspector.elements & BLOCKED_EMBEDDED_ELEMENTS)
+    if blocked_elements:
+        errors.append("contains blocked embedded element: " + ", ".join(blocked_elements))
 
     if any(
         tag == "script" and attribute == "src"
@@ -252,12 +472,12 @@ def validate_inspector(inspector: HTMLDocumentInspector) -> list[str]:
     ordinary_urls = [
         value
         for _, attribute, value in inspector.url_attributes
-        if attribute != "srcset"
+        if attribute not in SRCSET_ATTRIBUTES
     ]
     srcset_values = [
         value
         for _, attribute, value in inspector.url_attributes
-        if attribute == "srcset"
+        if attribute in SRCSET_ATTRIBUTES
     ]
     parsed_srcsets = [(value, srcset_urls(value)) for value in srcset_values]
     if any(is_remote_url_reference(value) for value in ordinary_urls) or any(
@@ -277,13 +497,22 @@ def validate_inspector(inspector: HTMLDocumentInspector) -> list[str]:
         for value, candidates in parsed_srcsets
     ):
         errors.append("contains non-embedded URL reference")
+    if any(
+        attribute in ACTIVE_TRACKING_URL_ATTRIBUTES and bool(value.strip())
+        for _, attribute, value in inspector.url_attributes
+    ):
+        errors.append("contains active tracking URL")
 
-    if any(CSS_IMPORT_RE.search(source) for source in inspector.style_sources):
+    css_code = [
+        css_code_without_strings_and_comments(source)
+        for source in inspector.style_sources
+    ]
+    if any(CSS_IMPORT_RE.search(source) for source in css_code):
         errors.append("contains external CSS import")
     css_urls = [
-        matched_css_url(match)
+        value
         for source in inspector.style_sources
-        for match in CSS_URL_RE.finditer(source)
+        for value in css_url_values(source) + css_string_url_function_values(source)
     ]
     if any(is_remote_url_reference(value) for value in css_urls):
         errors.append("contains remote CSS url")
@@ -444,11 +673,11 @@ def main() -> int:
                 "filename": html_path.name,
                 "html_path": str(html_path),
                 "file_url": file_url(html_path),
-                "link_label": f"Open {title}",
+                "link_label": markdown_link_label(title),
                 "max_files": args.max_files,
                 "title": title,
             }
-            print(json.dumps(result, sort_keys=True))
+            print(json.dumps(result, sort_keys=True), flush=True)
     except OSError as error:
         print(f"error: output cannot be written safely: {error}", file=sys.stderr)
         return 2

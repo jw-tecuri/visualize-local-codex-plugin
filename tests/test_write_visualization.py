@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import select
 import stat
 import subprocess
 import sys
@@ -37,6 +38,7 @@ class WriteVisualizationTests(unittest.TestCase):
     def writer_command(
         self,
         *,
+        title: str = "Writer Test",
         slug: str = "writer test",
         max_files: int = 50,
     ) -> list[str]:
@@ -44,7 +46,7 @@ class WriteVisualizationTests(unittest.TestCase):
             sys.executable,
             str(WRITER),
             "--title",
-            "Writer Test",
+            title,
             "--slug",
             slug,
             "--max-files",
@@ -56,6 +58,7 @@ class WriteVisualizationTests(unittest.TestCase):
         root,
         html: str = VALID_HTML,
         *,
+        title: str = "Writer Test",
         slug: str = "writer test",
         max_files: int = 50,
         cwd=None,
@@ -63,7 +66,7 @@ class WriteVisualizationTests(unittest.TestCase):
         env = os.environ.copy()
         env["CODEX_VISUALIZE_LOCAL_ROOT"] = str(root)
         return subprocess.run(
-            self.writer_command(slug=slug, max_files=max_files),
+            self.writer_command(title=title, slug=slug, max_files=max_files),
             input=html,
             text=True,
             capture_output=True,
@@ -116,6 +119,41 @@ class WriteVisualizationTests(unittest.TestCase):
             lock_path = root / write_visualization.LOCK_FILE_NAME
             self.assertEqual(stat.S_IMODE(lock_path.stat().st_mode), 0o600)
 
+    def test_escapes_markdown_link_label(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+
+            result = self.run_writer(root, title="Bad]\n[Title\\\x1b")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["link_label"], "Open Bad\\] \\[Title\\\\")
+
+    def test_rejects_additional_external_url_attributes(self) -> None:
+        external_references = {
+            "SVG xlink": '<svg><image xlink:href="https://example.com/a.png"></image></svg>',
+            "ping": '<a href="#target" ping="https://example.com/ping">Target</a>',
+            "attribution source": (
+                '<img src="data:image/gif;base64,AA==" '
+                'attributionsrc="https://example.com/register">'
+            ),
+            "background": '<table background="missing.png"></table>',
+            "image srcset": (
+                '<link rel="preload" imagesrcset="https://example.com/a.png 1x">'
+            ),
+        }
+
+        for label, markup in external_references.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / ".codex-visualize-local"
+                html = VALID_HTML.replace("</body>", markup + "</body>")
+
+                result = self.run_writer(root, html)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("invalid HTML", result.stderr)
+                self.assertFalse(root.exists())
+
     def test_injects_restrictive_csp_as_first_head_child(self) -> None:
         html = VALID_HTML.replace(
             "</body>",
@@ -159,6 +197,66 @@ class WriteVisualizationTests(unittest.TestCase):
             written_html = Path(payload["html_path"]).read_text(encoding="utf-8")
             self.assertEqual(written_html.count("Content-Security-Policy"), 2)
             self.assertIn(existing_policy, written_html)
+
+    def test_rejects_meta_refresh(self) -> None:
+        refresh = '<meta http-equiv="refresh" content="0; url=https://example.com">'
+        html = VALID_HTML.replace("<meta charset", refresh + "<meta charset")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+
+            result = self.run_writer(root, html)
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("meta refresh", result.stderr)
+            self.assertFalse(root.exists())
+
+    def test_rejects_elements_blocked_by_csp(self) -> None:
+        blocked_markup = {
+            "iframe": '<iframe src="about:blank"></iframe>',
+            "object": '<object data="data:text/plain,example"></object>',
+            "embed": '<embed src="data:text/plain,example">',
+        }
+
+        for label, markup in blocked_markup.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / ".codex-visualize-local"
+                html = VALID_HTML.replace("</body>", markup + "</body>")
+
+                result = self.run_writer(root, html)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("blocked embedded element", result.stderr)
+                self.assertFalse(root.exists())
+
+    def test_requires_valid_color_scheme_meta_and_css_property(self) -> None:
+        cases = {
+            "custom property": VALID_HTML.replace(
+                '<meta name="color-scheme" content="light dark">',
+                "",
+            ).replace("color-scheme: light dark", "--color-scheme: light dark"),
+            "invalid meta content": VALID_HTML.replace(
+                'content="light dark"',
+                'content="light"',
+            ),
+            "missing CSS property": VALID_HTML.replace(
+                "color-scheme: light dark",
+                "--color-scheme: light dark",
+            ),
+            "supports query only": VALID_HTML.replace(
+                "color-scheme: light dark",
+                "@supports (color-scheme: light dark) {}",
+            ),
+        }
+
+        for label, html in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / ".codex-visualize-local"
+
+                result = self.run_writer(root, html)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("missing color-scheme", result.stderr)
+                self.assertFalse(root.exists())
 
     def test_relative_override_returns_absolute_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -322,6 +420,18 @@ class WriteVisualizationTests(unittest.TestCase):
             "image source": '<img src="missing.png">',
             "video poster": '<video poster="missing.jpg"></video>',
             "CSS URL": '<div style="background-image: url(missing.png)"></div>',
+            "quoted remote CSS URL": (
+                '<div style="background-image: url(\'https://example.com/a.png\')"></div>'
+            ),
+            "CSS image set": (
+                '<div style="background-image: image-set(\'missing.png\' 1x)"></div>'
+            ),
+            "CSS image function": (
+                '<div style="background-image: image(\'missing.png\')"></div>'
+            ),
+            "SVG presentation URL": (
+                '<svg><rect fill="url(https://example.com/pattern.svg)"></rect></svg>'
+            ),
         }
 
         for label, markup in local_references.items():
@@ -352,6 +462,21 @@ class WriteVisualizationTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertTrue(Path(payload["html_path"]).exists())
 
+    def test_ignores_dependency_tokens_in_css_strings_and_comments(self) -> None:
+        css = (
+            '<style>.label::after{content:"@import url(missing.png)"}'
+            "/* @import url(missing.png); */</style>"
+        )
+        html = VALID_HTML.replace("</head>", css + "</head>")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+
+            result = self.run_writer(root, html)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertTrue(Path(payload["html_path"]).exists())
+
     def test_allows_embedded_asset_references(self) -> None:
         html = VALID_HTML.replace(
             "</body>",
@@ -359,6 +484,10 @@ class WriteVisualizationTests(unittest.TestCase):
             '<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==">'
             '<svg><use href="#icon"></use></svg>'
             '<div style="mask-image: url(#icon)"></div>'
+            '<div style="background-image: url(\'data:image/gif;base64,AA==\')"></div>'
+            '<div style="background-image: image-set(\'data:image/gif;base64,AA==\' 1x)"></div>'
+            '<div style="background-image: image(\'data:image/gif;base64,AA==\')"></div>'
+            '<svg><rect fill="url(#icon)"></rect></svg>'
             "</body>",
         )
         with tempfile.TemporaryDirectory() as temp:
@@ -429,6 +558,49 @@ class WriteVisualizationTests(unittest.TestCase):
             self.assertEqual(len(remaining), 1)
             self.assertIn(remaining[0].name, {payload["filename"] for payload in payloads})
             self.assertEqual(stat.S_IMODE(lock_path.stat().st_mode), 0o600)
+
+    def test_success_output_is_flushed_before_process_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / ".codex-visualize-local"
+            env = os.environ.copy()
+            env["CODEX_VISUALIZE_LOCAL_ROOT"] = str(root)
+            wrapper = (
+                f"import sys,time; sys.path.insert(0,{str(SCRIPT_DIR)!r}); "
+                "import write_visualization as writer; "
+                "returncode=writer.main(); time.sleep(2); raise SystemExit(returncode)"
+            )
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    wrapper,
+                    "--title",
+                    "Writer Test",
+                    "--slug",
+                    "flush-test",
+                    "--max-files",
+                    "1",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            assert process.stdin is not None
+            assert process.stdout is not None
+            process.stdin.write(VALID_HTML)
+            process.stdin.close()
+            process.stdin = None
+
+            readable = select.select([process.stdout], [], [], 1)[0]
+            self.assertTrue(readable)
+            self.assertIsNone(process.poll())
+            payload = json.loads(process.stdout.readline())
+            _, stderr = process.communicate(timeout=5)
+
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertTrue(Path(payload["html_path"]).exists())
 
     def test_pruning_never_deletes_the_current_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
